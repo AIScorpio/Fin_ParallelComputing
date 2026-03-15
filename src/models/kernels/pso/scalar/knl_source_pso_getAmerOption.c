@@ -63,7 +63,7 @@ __kernel void psoAmerOption_gb(
             /* use private float for comparison interim; consider make PATH outer loop */
             // check if first cross: 1) pso > St; 2) corresponding boundary index not set from previous loops
             if (cur_fish_val >= cur_St_val){  
-                boundary_idx[boundary_gid] = prd;        //store current time step
+                boundary_idx[boundary_gid] = prd;        //overwrite: final = min prd = FIRST crossing
                 exercise[boundary_gid] = cur_St_val;     //store current price
             } 
         }

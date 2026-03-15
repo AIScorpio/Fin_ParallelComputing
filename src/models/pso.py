@@ -71,7 +71,7 @@ class PSO_Numpy(PSOBase):
         boundaryIdx = np.argmax(crossings, axis=1)       # first True index (0 when no True)
 
         # CORRECT: reset to maturity ONLY for paths that genuinely never cross
-        boundaryIdx[-has_crossing] = self.mc.nPeriod - 1    # to handle time T index for boundary index to match St time wise dimension (i.e. indexing from zero)
+        boundaryIdx[~has_crossing] = self.mc.nPeriod - 1    # to handle time T index for boundary index to match St time wise dimension (i.e. indexing from zero)
 
         # determine exercise prices by getting the early cross St_ij on path i and period j
         exerciseSt = self.mc.St[np.arange(len(boundaryIdx)), boundaryIdx]    # len of boundaryIdx is nPath
