@@ -66,10 +66,12 @@ class PSO_Numpy(PSOBase):
         # 3. handle index of time period, spot price at time zero (present), St from time 1 to T
 
         # get the boundary index where early cross (particle period > St period), as if an early exercise judgement by this fish/particle
-        boundaryIdx = np.argmax(self.mc.St < in_particle[None, :], axis=1)   # [0, 1] as of true or false of early cross
+        crossings = self.mc.St < in_particle[None, :]    # [nPath, nPeriod] bool
+        has_crossing = np.any(crossings, axis=1)         # True only if ANY period crosses
+        boundaryIdx = np.argmax(crossings, axis=1)       # first True index (0 when no True)
 
-        # if no, set boundary index to last time period, meaning no early exercise suggested for that path
-        boundaryIdx[boundaryIdx==0] = self.mc.nPeriod - 1    # to handle time T index for boundary index to match St time wise dimension (i.e. indexing from zero)
+        # CORRECT: reset to maturity ONLY for paths that genuinely never cross
+        boundaryIdx[-has_crossing] = self.mc.nPeriod - 1    # to handle time T index for boundary index to match St time wise dimension (i.e. indexing from zero)
 
         # determine exercise prices by getting the early cross St_ij on path i and period j
         exerciseSt = self.mc.St[np.arange(len(boundaryIdx)), boundaryIdx]    # len of boundaryIdx is nPath
