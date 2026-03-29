@@ -47,7 +47,12 @@ def checkOpenCL():
         print(' Device - Max Work Group Size: {0:.0f}'\
         .format(device.max_work_group_size))
         print(' Device - Float Atomics Supported:', 'cl_khr_global_int32_base_atomics' in device.extensions)
+        
+        # print(f"preferred_vector_width_float: {device.preferred_vector_width_float}")
+        # print(f"native_vector_width_float: {device.native_vector_width_float}")
+
         print('\n') 
+
 
 
 if __name__ == "__main__":

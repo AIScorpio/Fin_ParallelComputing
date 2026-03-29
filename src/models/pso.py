@@ -587,31 +587,81 @@ class PSO_OpenCL_vec(PSOBase):
 
         # set SIMD vectorization parameters
         self.vec_size = vec_size
-        try:
-            # assert (self.nDim % self.vec_size) == 0
-            assert (self.mc.nPath % self.vec_size) == 0
-        except Exception as e:
-            print(f"nDim {self.nDim} or nPath {self.mc.nPath} not divisable by vec_size {self.vec_size}")
+        #  **2026-3-29**
+        # try:
+        #     # assert (self.nDim % self.vec_size) == 0
+        #     assert (self.mc.nPath % self.vec_size) == 0
+        # except Exception as e:
+        #     print(f"nDim {self.nDim} or nPath {self.mc.nPath} not divisable by vec_size {self.vec_size}")
 
-        self.nVec_nPath = self.mc.nPath // self.vec_size   # for boundary_idx, exercise
+        # self.nVec_nPath = self.mc.nPath // self.vec_size   # for boundary_idx, exercise
+
+        self.nPath_original = self.mc.nPath
+        self.nVec_nPath = (self.mc.nPath + self.vec_size - 1) // self.vec_size   # for boundary_idx, exercise
+        
+        self.nDim_original = self.nDim
+        self.nVec_nDim = (self.nDim + self.vec_size - 1) // self.vec_size   # for position, velocity, pbest_pos, gbest_pos
+        #  **2026-3-29**
 
         # init swarm particles positions & velocity    (nDim, nFish)
         self.position = self.mc.pos_init.copy()
         self.velocity = self.mc.vel_init.copy()
-        self.pos_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.position)
-        self.vel_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.velocity)
+        # self.pos_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.position)
+        # self.vel_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.velocity)
 
         # init r1, r2 on device
         self.r1 = self.mc.r1
         self.r2 = self.mc.r2
-        self.r1_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r1)
-        self.r2_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r2)
+        # self.r1_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r1)
+        # self.r2_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r2)
 
         # init fitness buffer
         # mc.St is in shape [nPath, nPeriod], to vectorize, need to transpose to [nPeriod, nPath]
         # St_vec in shapge [nPeriod, vec_size, nVec_nPath], 将 nPath 折叠，一个 period 的迭代，可以同时处理 vec_size个 path
-        self.St_vec = self.mc.St.copy().T.reshape(self.mc.nPeriod, self.nVec_nPath, self.vec_size).transpose(0, 1, 2).copy().reshape(-1, self.vec_size)
+        
+        #  **2026-3-29**
+        # self.St_vec = self.mc.St.copy().T.reshape(self.mc.nPeriod, self.nVec_nPath, self.vec_size).transpose(0, 1, 2).copy().reshape(-1, self.vec_size)
+
+        pad_count = self.nVec_nPath * self.vec_size - self.nPath_original
+        if pad_count > 0:
+            St_padded = np.full(
+                (self.nVec_nPath * self.vec_size, self.mc.nPeriod),
+                self.mc.K, dtype=np.float32
+            )
+            St_padded[:self.nPath_original, :] = self.mc.St
+        else:
+            St_padded = self.mc.St
+        self.St_vec = St_padded.copy().T.reshape(self.mc.nPeriod, self.nVec_nPath, self.vec_size).transpose(0, 1, 2).copy().reshape(-1, self.vec_size)
+
+        self.nDim_padded = self.nVec_nDim * self.vec_size
+        pad_dim = self.nDim_padded - self.nDim_original
+        if pad_dim > 0:
+            # Pad position, velocity, pbest_pos, r1, r2 到 [nDim_padded, nFish]
+            self.position = np.vstack([
+                self.position,
+                np.full((pad_dim, self.nFish), self.mc.K, dtype=np.float32)
+            ])
+            self.velocity = np.vstack([
+                self.velocity,
+                np.zeros((pad_dim, self.nFish), dtype=np.float32)
+            ])
+            self.r1 = np.vstack([
+                self.r1,
+                np.zeros((pad_dim, self.nFish), dtype=np.float32)
+            ])
+            self.r2 = np.vstack([
+                self.r2,
+                np.zeros((pad_dim, self.nFish), dtype=np.float32)
+            ])
+        #  **2026-3-29**
+
+        # **2026-3-29** 用 padded 后的数组一次性创建所有 buffers
         self.St_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.St_vec.ravel())
+
+        self.pos_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.position)
+        self.vel_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.velocity)
+        self.r1_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r1)
+        self.r2_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r2)
 
         # init particles costs          (nFish,)
         self.costs = np.zeros((self.nFish,), dtype=np.float32)
@@ -627,30 +677,39 @@ class PSO_OpenCL_vec(PSOBase):
         gid = np.argmax(self.pbest_costs)         # find index for global optimal 
         self.gbest_cost = self.pbest_costs[gid]   # np.float32 
         self.gbest_cost_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.ALLOC_HOST_PTR, size=self.gbest_cost.nbytes) 
-        self.gbest_pos = self.pbest_pos[:, gid].copy()#.reshape(self.nDim, 1)   # (nDim, ) reshape to col vector
-        self.gbest_pos_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.gbest_pos)
         
+        # **2026-3-29** gbest_pos 需要 padding
+        self.gbest_pos = self.pbest_pos[:, gid].copy()#.reshape(self.nDim, 1)   # (nDim, ) reshape to col vector
+        if pad_dim > 0:
+            self.gbest_pos = np.concatenate([
+                self.gbest_pos,
+                np.full(pad_dim, self.mc.K, dtype=np.float32)
+            ])
+        self.gbest_pos_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.gbest_pos)
+        #  **2026-3-29**
+
         # create array best global cost storage for each iteration
         self.BestCosts = np.array([])
 
-        # prepare kernels
+        # prepare kernels - 使用 nDim_padded **2026-3-29** 
         # searchGrid
         build_options = ["-cl-fast-relaxed-math", "-cl-mad-enable", "-cl-no-signed-zeros",]
-        prog_sg = cl.Program(openCLEnv.context, open("./models/kernels/pso/vec/knl_source_pso_searchGrid_vec.c").read()%(self.nDim)).build(options=build_options)
+        # 使用 nDim_padded **2026-3-29** 
+        prog_sg = cl.Program(openCLEnv.context, open("./models/kernels/pso/vec/knl_source_pso_searchGrid_vec.c").read()%(self.nDim_padded)).build(options=build_options)
         # self.knl_searchGrid = cl.Kernel(prog_sg, 'searchGrid')
         self.knl_searchGrid = cl.Kernel(prog_sg, 'searchGrid_f2f4')
         # fitness function
         # build_options = ["-cl-fast-relaxed-math", "-cl-mad-enable", "-cl-no-signed-zeros", f"-DVEC_SIZE={self.vec_size}"]
         build_options = ["-cl-fast-relaxed-math", "-cl-mad-enable", "-cl-no-signed-zeros", 
                          f"-DVEC_SIZE={self.vec_size}",
-                         f"-Dn_PATH={self.mc.nPath}",
+                         f"-Dn_PATH={self.mc.nPath}",         ## **2026-3-29**  
                          f"-Dn_PERIOD={self.mc.nPeriod}",
                          ]
         prog_AmerOpt = cl.Program(openCLEnv.context, open("./models/kernels/pso/vec/knl_source_pso_getAmerOption_vec.c").read() ).build(options=build_options)
         # prog_AmerOpt = cl.Program(openCLEnv.context, open("./models/kernels/knl_source_pso_getAmerOption.c").read()%(self.mc.nPath, self.mc.nPeriod)).build(options=build_options)
         self.knl_psoAmerOption_gb = cl.Kernel(prog_AmerOpt, 'psoAmerOption_gb3_vec')
-        # update bests
-        prog_ub = cl.Program(openCLEnv.context, open("./models/kernels/pso/vec/knl_source_pso_updateBests_vec.c").read()%(self.nDim, self.nFish)).build()
+        # update bests - 使用 nDim_padded **2026-3-29** 
+        prog_ub = cl.Program(openCLEnv.context, open("./models/kernels/pso/vec/knl_source_pso_updateBests_vec.c").read()%(self.nDim_padded, self.nFish)).build()
         # self.knl_update_pbest = cl.Kernel(prog_ub, 'update_pbest')
         self.knl_update_pbest = cl.Kernel(prog_ub, 'update_pbest_f2f4')
         # self.knl_update_gbest_pos = cl.Kernel(prog_ub, 'update_gbest_pos')
@@ -721,8 +780,8 @@ class PSO_OpenCL_vec(PSOBase):
                 self.gbest_cost = self.pbest_costs[gid]
                 self.knl_update_gbest_pos.set_args(self.gbest_pos_d, self.pbest_pos_d, 
                                       np.int32(gid))
-                # run kernel
-                global_size = (self.nDim, )
+                # run kernel - 使用 nDim_padded **2026-3-29** 
+                global_size = (self.nDim_padded // 4, )
                 local_size = None
                 cl.enqueue_nd_range_kernel(openCLEnv.queue, self.knl_update_gbest_pos, global_size, local_size)
                 openCLEnv.queue.finish()    # <------- sychrnozation
@@ -766,50 +825,107 @@ class PSO_OpenCL_vec_fusion(PSOBase):
 
         # set SIMD vectorization parameters
         self.vec_size = vec_size
-        try:
-            # assert (self.nDim % self.vec_size) == 0
-            assert (self.mc.nPath % self.vec_size) == 0
-        except Exception as e:
-            print(f"nDim {self.nDim} or nPath {self.mc.nPath} not divisable by vec_size {self.vec_size}")
+        #  **2026-3-29**
+        # try:
+        #     # assert (self.nDim % self.vec_size) == 0
+        #     assert (self.mc.nPath % self.vec_size) == 0
+        # except Exception as e:
+        #     print(f"nDim {self.nDim} or nPath {self.mc.nPath} not divisable by vec_size {self.vec_size}")
 
-        self.nVec_nPath = self.mc.nPath // self.vec_size   # for boundary_idx, exercise
+        # self.nVec_nPath = self.mc.nPath // self.vec_size   # for boundary_idx, exercise
+
+        self.nPath_original = self.mc.nPath
+        self.nVec_nPath = (self.mc.nPath + self.vec_size - 1) // self.vec_size   # for boundary_idx, exercise
+
+        self.nDim_original = self.nDim
+        self.nVec_nDim = (self.nDim + self.vec_size - 1) // self.vec_size   # for position, velocity, pbest_pos, gbest_pos
+        #  **2026-3-29**
 
         # init swarm particles positions & velocity    (nDim, nFish)
         self.position = self.mc.pos_init.copy()
         self.velocity = self.mc.vel_init.copy()
-        self.pos_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.position)
-        self.vel_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.velocity)
+        # self.pos_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.position)
+        # self.vel_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.velocity)
 
         # init r1, r2 on device
         self.r1 = self.mc.r1
         self.r2 = self.mc.r2
-        self.r1_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r1)
-        self.r2_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r2)
+        # self.r1_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r1)
+        # self.r2_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r2)
 
         # init fitness buffer
         # mc.St is in shape [nPath, nPeriod], to vectorize, need to transpose to [nPeriod, nPath]
         # St_vec in shapge [nPeriod, vec_size, nVec_nPath], 将 nPath 折叠，一个 period 的迭代，可以同时处理 vec_size个 path
-        self.St_vec = self.mc.St.copy().T.reshape(self.mc.nPeriod, self.nVec_nPath, self.vec_size).transpose(0, 1, 2).copy().reshape(-1, self.vec_size)
+        
+        #  **2026-3-29**
+        # self.St_vec = self.mc.St.copy().T.reshape(self.mc.nPeriod, self.nVec_nPath, self.vec_size).transpose(0, 1, 2).copy().reshape(-1, self.vec_size)
+
+        pad_count = self.nVec_nPath * self.vec_size - self.nPath_original
+        if pad_count > 0:
+            St_padded = np.full(
+                (self.nVec_nPath * self.vec_size, self.mc.nPeriod),
+                self.mc.K, dtype=np.float32
+            )
+            St_padded[:self.nPath_original, :] = self.mc.St
+        else:
+            St_padded = self.mc.St
+        self.St_vec = St_padded.copy().T.reshape(self.mc.nPeriod, self.nVec_nPath, self.vec_size).transpose(0, 1, 2).copy().reshape(-1, self.vec_size)
+
+        self.nDim_padded = self.nVec_nDim * self.vec_size
+        pad_dim = self.nDim_padded - self.nDim_original
+        if pad_dim > 0:
+            # Pad position, velocity, pbest_pos, r1, r2 到 [nDim_padded, nFish]
+            self.position = np.vstack([
+                self.position,
+                np.full((pad_dim, self.nFish), self.mc.K, dtype=np.float32)
+            ])
+            self.velocity = np.vstack([
+                self.velocity,
+                np.zeros((pad_dim, self.nFish), dtype=np.float32)
+            ])
+            self.r1 = np.vstack([
+                self.r1,
+                np.zeros((pad_dim, self.nFish), dtype=np.float32)
+            ])
+            self.r2 = np.vstack([
+                self.r2,
+                np.zeros((pad_dim, self.nFish), dtype=np.float32)
+            ])
+        #  **2026-3-29**
+        
+        # **2026-3-29** 用 padded 后的数组一次性创建所有 buffers
         self.St_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.St_vec.ravel())
 
-        ## compute on the fly on GPU - init particles costs          (nFish,)
-        # self.costs = np.zeros((self.nFish,), dtype=np.float32)
-        # self.costs_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.ALLOC_HOST_PTR, size=self.costs.nbytes)
+        self.pos_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.position)
+        self.vel_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.velocity)
+        self.r1_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r1)
+        self.r2_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=self.r2)
+
+        # init particles costs          (nFish,)
+        self.costs = np.zeros((self.nFish,), dtype=np.float32)
+        self.costs_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.ALLOC_HOST_PTR, size=self.costs.nbytes)
         
         # init personal best (costs & position)
-        # self.pbest_costs = self.costs.copy()     # (nFish,)      
-        self.pbest_costs = np.zeros((self.nFish,), dtype=np.float32)   
+        self.pbest_costs = self.costs.copy()     # (nFish,)      
         self.pbest_costs_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.ALLOC_HOST_PTR, size=self.pbest_costs.nbytes)
         self.pbest_pos = self.position.copy()    # (nDim, nFish) each particle has its persional best pos by dimension
         self.pbest_pos_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.pbest_pos)  
         
         # init global best (costs & position)      
         gid = np.argmax(self.pbest_costs)         # find index for global optimal 
-        self.gbest_cost = self.pbest_costs[gid]   # np.float32 >>>> change into 1 element array
+        self.gbest_cost = self.pbest_costs[gid]   # np.float32 
         self.gbest_cost_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.ALLOC_HOST_PTR, size=self.gbest_cost.nbytes) 
-        self.gbest_pos = self.pbest_pos[:, gid].copy()#.reshape(self.nDim, 1)   # (nDim, ) reshape to col vector
-        self.gbest_pos_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.gbest_pos)
         
+        # **2026-3-29** gbest_pos 需要 padding
+        self.gbest_pos = self.pbest_pos[:, gid].copy()#.reshape(self.nDim, 1)   # (nDim, ) reshape to col vector
+        if pad_dim > 0:
+            self.gbest_pos = np.concatenate([
+                self.gbest_pos,
+                np.full(pad_dim, self.mc.K, dtype=np.float32)
+            ])
+        self.gbest_pos_d = cl.Buffer(openCLEnv.context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.gbest_pos)
+        #  **2026-3-29**
+
         # create array best global cost storage for each iteration
         self.BestCosts = np.array([])
 
@@ -817,8 +933,8 @@ class PSO_OpenCL_vec_fusion(PSOBase):
         # searchGrid, fitness function, update pbest
         build_options = ["-cl-fast-relaxed-math", "-cl-mad-enable", "-cl-no-signed-zeros", 
                          f"-DVEC_SIZE={self.vec_size}",
-                         f"-Dn_Dim={self.nDim}",
-                         f"-Dn_PATH={self.mc.nPath}",
+                         f"-Dn_Dim={self.nDim_padded}",             # 使用 nDim_padded **2026-3-29** 
+                         f"-Dn_PATH={self.mc.nPath}",        
                          f"-Dn_PERIOD={self.mc.nPeriod}",
                          f"-Dn_Fish={self.nFish}",
                          ]
@@ -881,8 +997,8 @@ class PSO_OpenCL_vec_fusion(PSOBase):
                 self.gbest_cost = self.pbest_costs[gid]
                 self.knl_update_gbest_pos.set_args(self.gbest_pos_d, self.pbest_pos_d, 
                                       np.int32(gid))
-                # run kernel
-                global_size = (self.nDim, )
+                # run kernel - 使用 nDim_padded **2026-3-29** 
+                global_size = (self.nDim_padded // 4, )
                 local_size = None
                 cl.enqueue_nd_range_kernel(openCLEnv.queue, self.knl_update_gbest_pos, global_size, local_size)
                 openCLEnv.queue.finish()    # <------- sychrnozation

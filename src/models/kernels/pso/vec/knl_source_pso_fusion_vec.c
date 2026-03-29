@@ -39,10 +39,14 @@
     #error "Unsupported VEC_SIZE"
 #endif
 
-#define n_Vec (n_Dim / 4)
-// #define n_VecPath ((n_PATH + VEC_SIZE - 1) / VEC_SIZE)
-#define n_VecPath (n_PATH / VEC_SIZE)
+// **2026-3-29** 
+#define n_Dim_main (n_Dim / 4 * 4)       // **2026-3-29** for unrolling, only process multiples of 4 dimensions, the rest will be ignored (if any)
 
+#define n_Vec (n_Dim / 4)
+// #define n_VecPath (n_PATH / VEC_SIZE)
+// #define n_Vec (n_Dim_main / 4)
+#define n_VecPath ((n_PATH + VEC_SIZE - 1) / VEC_SIZE)
+// **2026-3-29** 
 
 /* update nParticle positions & velocity, each thread handles on particle */
 __kernel void pso_vec(
@@ -70,7 +74,8 @@ __kernel void pso_vec(
 
     /* 1. searchGrid */
     #pragma unroll 8
-    for (int i = 0; i < n_Dim; i += 4) {
+    for (int i = 0; i < n_Dim; i += 4) {          // **2026-3-29** 
+    // for (int i = 0; i < n_Dim_main; i += 4) {        // **2026-3-29** unroll 8 means process 32 dimensions per thread, so loop step is 4 (float4)
         // Vector index starts at (i * nFish + gid)
         int base_idx = i * nParticle + gid;
 
@@ -123,11 +128,36 @@ __kernel void pso_vec(
         velocity[base_idx + 2 * nParticle] = vel.s2;
         velocity[base_idx + 3 * nParticle] = vel.s3;
     }
+    // // **2026-3-29** tail: scalar loop for remaining dimensions if n_Dim is not multiple of 4
+    // for (int i = n_Dim_main; i < n_Dim; i++){
+    //     int idx = i * nParticle + gid;
+    //     float pos = position[idx];
+    //     float vel = velocity[idx];
+    //     float pbest = pbest_pos[idx];
+    //     float r1val = r1[idx];
+    //     float r2val = r2[idx];
+    //     float gbest = gbest_pos[i];
+
+    //     vel = w * vel + c1 * r1val * (pbest - pos) + c2 * r2val * (gbest - pos);
+    //     pos += vel;
+
+    //     position[idx] = pos;
+    //     velocity[idx] = vel;
+    // }
+    // // **2026-3-29** 
     // barrier(CLK_GLOBAL_MEM_FENCE);
 
     /* 2. fitness calculation - American option */
     float dt = T / n_PERIOD;
     float tmp_cost = 0.0f;
+
+    // // **2026-3-29** Private memory cache for pso
+    // float pso_private[n_PERIOD];
+    // #pragma unroll 8
+    // for (int i = 0; i < n_PERIOD; i++) {
+    //     pso_private[i] = position[gid + i * nParticle];
+    // }
+    // // **2026-3-29**
 
     // 每个线程处理VEC_SIZE个路径
     for (int vec_path=0; vec_path<n_VecPath; vec_path++){
@@ -137,7 +167,8 @@ __kernel void pso_vec(
 
         #pragma unroll 8 //VEC_SIZE
         for (int prd=n_PERIOD-1; prd>-1; prd--){
-            float cur_fish_val = position[gid + prd * nParticle];
+            float cur_fish_val = position[gid + prd * nParticle];     
+            // float cur_fish_val = pso_private[prd];  // **2026-3-29** 从私有内存读取，减少全局内存访问
             float_vec cur_St_val = St_vec[vec_path + prd * n_VecPath];
 
             // 向量化比较更新
@@ -171,7 +202,8 @@ __kernel void pso_vec(
 
         // Copy all dimensions in steps of 4
         #pragma unroll 8
-        for (int i = 0; i < n_Dim; i += 4) {
+        for (int i = 0; i < n_Dim; i += 4) {            // **2026-3-29** 
+        // for (int i = 0; i < n_Dim_main; i += 4) {        // **2026-3-29** unroll 8 means process 32 dimensions per thread, so loop step is 4 (float4)
             int base_idx = i * nParticle + gid;
 
             float4 pos_vec = (float4)(
@@ -186,35 +218,69 @@ __kernel void pso_vec(
             pbest_pos[base_idx + 2 * nParticle] = pos_vec.s2;
             pbest_pos[base_idx + 3 * nParticle] = pos_vec.s3;
         }
+        // // **2026-3-29** 
+        // for (int i = n_Dim_main; i < n_Dim; i++){
+        //     int idx = i * nParticle + gid;
+        //     pbest_pos[idx] = position[idx];
+        // }
+        // // **2026-3-29** 
     }
 }
 
 
-// each thread handle one dimension
+// each thread handle vec_size=4 dimension
 __kernel void update_gbest_pos_vec(
     __global float *gbest_pos, 
     __global float *pbest_pos,
     const int gbest_id
 ){
-    int gid = get_global_id(0);
+    int gid = get_global_id(0);     // 0 to nVec_nDim-1
     
-    #pragma unroll 8
-    for (int i = 0; i < n_Dim; i += 4) {
-        int idx0 = (i + 0) * n_Fish + gbest_id;
-        int idx1 = (i + 1) * n_Fish + gbest_id;
-        int idx2 = (i + 2) * n_Fish + gbest_id;
-        int idx3 = (i + 3) * n_Fish + gbest_id;
+    // 每个线程只处理自己的那一组 4 个维度
+    int i = gid * 4;
+    
+    int idx0 = (i + 0) * n_Fish + gbest_id;
+    int idx1 = (i + 1) * n_Fish + gbest_id;
+    int idx2 = (i + 2) * n_Fish + gbest_id;
+    int idx3 = (i + 3) * n_Fish + gbest_id;
+    float4 val = (float4)(
+        pbest_pos[idx0],
+        pbest_pos[idx1],
+        pbest_pos[idx2],
+        pbest_pos[idx3]
+    );
+    gbest_pos[i + 0] = val.s0;
+    gbest_pos[i + 1] = val.s1;
+    gbest_pos[i + 2] = val.s2;
+    gbest_pos[i + 3] = val.s3;
+    // 没有 for 循环！
 
-        float4 val = (float4)(
-            pbest_pos[idx0],
-            pbest_pos[idx1],
-            pbest_pos[idx2],
-            pbest_pos[idx3]
-        );
+    // int gid = get_global_id(0);
+    
+    // #pragma unroll 8
+    // for (int i = 0; i < n_Dim; i += 4) {         // **2026-3-29** 
+    // // for (int i = 0; i < n_Dim_main; i += 4) {       // **2026-3-29** unroll 8 means process 32 dimensions per thread, so loop step is 4 (float4)
+    //     int idx0 = (i + 0) * n_Fish + gbest_id;
+    //     int idx1 = (i + 1) * n_Fish + gbest_id;
+    //     int idx2 = (i + 2) * n_Fish + gbest_id;
+    //     int idx3 = (i + 3) * n_Fish + gbest_id;
 
-        gbest_pos[i + 0] = val.s0;
-        gbest_pos[i + 1] = val.s1;
-        gbest_pos[i + 2] = val.s2;
-        gbest_pos[i + 3] = val.s3;
-    }
+    //     float4 val = (float4)(
+    //         pbest_pos[idx0],
+    //         pbest_pos[idx1],
+    //         pbest_pos[idx2],
+    //         pbest_pos[idx3]
+    //     );
+
+    //     gbest_pos[i + 0] = val.s0;
+    //     gbest_pos[i + 1] = val.s1;
+    //     gbest_pos[i + 2] = val.s2;
+    //     gbest_pos[i + 3] = val.s3;
+    // }
+
+    // // **2026-3-29**   tail: scalar loop for remaining dimensions if n_Dim is not multiple of 4
+    // for (int i = n_Dim_main; i < n_Dim; i++){
+    //     gbest_pos[i] = pbest_pos[i * n_Fish + gbest_id];
+    // }
+    // // **2026-3-29** 
 }

@@ -157,6 +157,7 @@ __kernel void psoAmerOption_gb3(
             float cur_St_val = St[prd + path * n_PERIOD];
 
             // check early cross exhaust all periods
+            // BUG under fast-math: select() + isgreaterequal() may misbehave
             bound_idx = select(bound_idx, prd, isgreaterequal(cur_fish_val, cur_St_val));               // a>b? a:b will be select(b, a, a>b), mind the sequence!!
             early_excise = select(early_excise, cur_St_val, isgreaterequal(cur_fish_val, cur_St_val));
 

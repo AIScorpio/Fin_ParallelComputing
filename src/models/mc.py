@@ -125,8 +125,14 @@ class hybridMonteCarlo(MonteCarloBase):
         nDim = self.nPeriod
         rng = np.random.default_rng(seed=52)
         # rng = np.random.default_rng()
-        self.pos_init = rng.uniform(size=(nDim, nFish)).astype(np.float32) * 100.0    #self.S0
-        self.vel_init = rng.uniform(size=(nDim, nFish)).astype(np.float32) * 5.0      #np.abs(self.S0 - self.K)
+
+        # self.pos_init = rng.uniform(size=(nDim, nFish)).astype(np.float32) * 100.0    #self.S0
+        # self.vel_init = rng.uniform(size=(nDim, nFish)).astype(np.float32) * 5.0      #np.abs(self.S0 - self.K)
+        
+        high = max(self.S0, self.K)
+        self.pos_init = rng.uniform(size=(nDim, nFish)).astype(np.float32) * high
+        self.vel_init = rng.uniform(size=(nDim, nFish)).astype(np.float32) * high * 0.05
+
         self.r1 = rng.uniform(size=(nDim, nFish)).astype(np.float32)
         self.r2 = rng.uniform(size=(nDim, nFish)).astype(np.float32)
 

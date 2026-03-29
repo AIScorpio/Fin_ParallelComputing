@@ -57,6 +57,14 @@ __kernel void psoAmerOption_gb3_vec(
     float dt = T / n_PERIOD;
     float tmp_cost = 0.0f;
 
+    // // **2026-3-29** Private memory cache for pso
+    // float pso_private[n_PERIOD];
+    // #pragma unroll 8
+    // for (int i = 0; i < n_PERIOD; i++) {
+    //     pso_private[i] = pso[gid + i * nParticle];
+    // }
+    // // **2026-3-29**
+
     // 每个线程处理VEC_SIZE个路径
     for (int vec_path=0; vec_path<n_VecPath; vec_path++){
         int_vec bound_idx = (int_vec)(n_PERIOD - 1);            // init to last period
@@ -65,7 +73,8 @@ __kernel void psoAmerOption_gb3_vec(
 
         #pragma unroll 8 //VEC_SIZE
         for (int prd=n_PERIOD-1; prd>-1; prd--){
-            float cur_fish_val = pso[gid + prd * nParticle];
+            float cur_fish_val = pso[gid + prd * nParticle];     
+            // float cur_fish_val = pso_private[prd];  // **2026-3-29** 从私有内存读取，减少全局内存访问
             float_vec cur_St_val = St_vec[vec_path + prd * n_VecPath];
 
             // 向量化比较更新
