@@ -1016,7 +1016,7 @@ class PSO_OpenCL_vec_fusion(PSOBase):
         return
 
 # ##########################################################################
-# # 2026-4-7 - further fusion: combine searchGrid, fitness function, update pbest into one kernel, only keep update_gbest_pos as separate kernel for simplicity
+# # 2026-4-7 - further fusion: combine searchGrid, fitness function, update pbest, gbest into one kernel --- not performing well, need further optimization and debugging
 # class PSO_OpenCL_fullgpu_vec_fusion(PSOBase):
 #     def __init__(self, mc: MonteCarloBase, nFish, vec_size=4, iterMax=30):
 #         super().__init__(mc, nFish)
