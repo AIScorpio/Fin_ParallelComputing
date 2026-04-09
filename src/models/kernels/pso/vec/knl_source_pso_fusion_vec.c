@@ -40,15 +40,11 @@
 #endif
 
 // **2026-3-29** 
-#define n_Dim_main (n_Dim / 4 * 4)       // **2026-3-29** for unrolling, only process multiples of 4 dimensions, the rest will be ignored (if any)
-
-#define n_Vec (n_Dim / 4)
-// #define n_VecPath (n_PATH / VEC_SIZE)
-// #define n_Vec (n_Dim_main / 4)
+#define n_Vec (n_Dim / VEC_SIZE)         // **2026-4-7** changed from n_Dim / 4 to n_Dim / VEC_SIZE for experiment
 #define n_VecPath ((n_PATH + VEC_SIZE - 1) / VEC_SIZE)
 // **2026-3-29** 
 
-/* update nParticle positions & velocity, each thread handles on particle */
+/* update nParticle positions & velocity, each thread handles one particle */
 __kernel void pso_vec(
     // 1. searchGrid
     __global float *position,                // [nDim, nFish]
@@ -67,15 +63,14 @@ __kernel void pso_vec(
     const float K, 
     const char opt,
     // 3. update pbest
-    __global float *pbest_costs              // [nDim, nFish]
+    __global float *pbest_costs              // [nFish]
 ){
     int gid = get_global_id(0);              // index of the fish
     int nParticle = get_global_size(0);      // nFish
 
     /* 1. searchGrid */
-    #pragma unroll 8
+    #pragma unroll 32/VEC_SIZE
     for (int i = 0; i < n_Dim; i += 4) {          // **2026-3-29** 
-    // for (int i = 0; i < n_Dim_main; i += 4) {        // **2026-3-29** unroll 8 means process 32 dimensions per thread, so loop step is 4 (float4)
         // Vector index starts at (i * nFish + gid)
         int base_idx = i * nParticle + gid;
 
@@ -128,23 +123,6 @@ __kernel void pso_vec(
         velocity[base_idx + 2 * nParticle] = vel.s2;
         velocity[base_idx + 3 * nParticle] = vel.s3;
     }
-    // // **2026-3-29** tail: scalar loop for remaining dimensions if n_Dim is not multiple of 4
-    // for (int i = n_Dim_main; i < n_Dim; i++){
-    //     int idx = i * nParticle + gid;
-    //     float pos = position[idx];
-    //     float vel = velocity[idx];
-    //     float pbest = pbest_pos[idx];
-    //     float r1val = r1[idx];
-    //     float r2val = r2[idx];
-    //     float gbest = gbest_pos[i];
-
-    //     vel = w * vel + c1 * r1val * (pbest - pos) + c2 * r2val * (gbest - pos);
-    //     pos += vel;
-
-    //     position[idx] = pos;
-    //     velocity[idx] = vel;
-    // }
-    // // **2026-3-29** 
     // barrier(CLK_GLOBAL_MEM_FENCE);
 
     /* 2. fitness calculation - American option */
@@ -201,9 +179,8 @@ __kernel void pso_vec(
         pbest_costs[gid] = tmp_cost;
 
         // Copy all dimensions in steps of 4
-        #pragma unroll 8
+        #pragma unroll 32/VEC_SIZE
         for (int i = 0; i < n_Dim; i += 4) {            // **2026-3-29** 
-        // for (int i = 0; i < n_Dim_main; i += 4) {        // **2026-3-29** unroll 8 means process 32 dimensions per thread, so loop step is 4 (float4)
             int base_idx = i * nParticle + gid;
 
             float4 pos_vec = (float4)(
@@ -218,12 +195,6 @@ __kernel void pso_vec(
             pbest_pos[base_idx + 2 * nParticle] = pos_vec.s2;
             pbest_pos[base_idx + 3 * nParticle] = pos_vec.s3;
         }
-        // // **2026-3-29** 
-        // for (int i = n_Dim_main; i < n_Dim; i++){
-        //     int idx = i * nParticle + gid;
-        //     pbest_pos[idx] = position[idx];
-        // }
-        // // **2026-3-29** 
     }
 }
 
@@ -253,34 +224,4 @@ __kernel void update_gbest_pos_vec(
     gbest_pos[i + 1] = val.s1;
     gbest_pos[i + 2] = val.s2;
     gbest_pos[i + 3] = val.s3;
-    // 没有 for 循环！
-
-    // int gid = get_global_id(0);
-    
-    // #pragma unroll 8
-    // for (int i = 0; i < n_Dim; i += 4) {         // **2026-3-29** 
-    // // for (int i = 0; i < n_Dim_main; i += 4) {       // **2026-3-29** unroll 8 means process 32 dimensions per thread, so loop step is 4 (float4)
-    //     int idx0 = (i + 0) * n_Fish + gbest_id;
-    //     int idx1 = (i + 1) * n_Fish + gbest_id;
-    //     int idx2 = (i + 2) * n_Fish + gbest_id;
-    //     int idx3 = (i + 3) * n_Fish + gbest_id;
-
-    //     float4 val = (float4)(
-    //         pbest_pos[idx0],
-    //         pbest_pos[idx1],
-    //         pbest_pos[idx2],
-    //         pbest_pos[idx3]
-    //     );
-
-    //     gbest_pos[i + 0] = val.s0;
-    //     gbest_pos[i + 1] = val.s1;
-    //     gbest_pos[i + 2] = val.s2;
-    //     gbest_pos[i + 3] = val.s3;
-    // }
-
-    // // **2026-3-29**   tail: scalar loop for remaining dimensions if n_Dim is not multiple of 4
-    // for (int i = n_Dim_main; i < n_Dim; i++){
-    //     gbest_pos[i] = pbest_pos[i * n_Fish + gbest_id];
-    // }
-    // // **2026-3-29** 
 }
